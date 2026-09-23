@@ -1,0 +1,41 @@
+name: YouTube New Video Checker
+
+on:
+  schedule:
+    # 每 10 分鐘自動執行一次
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # 允許在 GitHub 網頁上手動點按鈕觸發測試
+
+jobs:
+  check-youtube:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 檢出專案程式碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Java 21 環境
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: 編譯 Java 程式
+        run: |
+          mkdir -p bin
+          javac -d bin src/main/java/YoutubeNotifier.java
+
+      - name: 執行檢查程式
+        env:
+          YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: |
+          java -cp bin YoutubeNotifier
+
+      - name: 自動更新並同步歷史紀錄檔 (避免重複通知)
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          git add last_video_id.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Chore: Update last video ID" && git push)
