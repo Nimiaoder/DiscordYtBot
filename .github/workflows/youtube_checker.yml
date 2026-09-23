@@ -23,7 +23,7 @@ jobs:
       - name: 編譯 Java 程式
         run: |
           mkdir -p bin
-          javac -d bin src/main/java/com/liu/YoutubeNotifier.java
+          javac -d bin src/main/java/com/liu/com.liu.YoutubeNotifier.java
 
       - name: 執行檢查程式
         env:
