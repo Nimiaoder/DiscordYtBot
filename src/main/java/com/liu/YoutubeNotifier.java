@@ -1,25 +1,26 @@
 package com.liu;
+
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class YoutubeNotifier {
 
-    private static final String LAST_VIDEO_FILE = "last_video_id.txt";
-
     public static void main(String[] args) throws Exception {
         String channelId = System.getenv("YOUTUBE_CHANNEL_ID");
         String webhookUrl = System.getenv("DISCORD_WEBHOOK_URL");
         String apiKey = System.getenv("YOUTUBE_API_KEY");
+        String dbUrl = System.getenv("NEON_DB_URL"); // 新增：Neon DB 連線
 
-        if (channelId == null || webhookUrl == null || apiKey == null) {
-            System.err.println("錯誤：環境變數 YOUTUBE_CHANNEL_ID, DISCORD_WEBHOOK_URL, YOUTUBE_API_KEY 未設定完整！");
+        if (channelId == null || webhookUrl == null || apiKey == null || dbUrl == null) {
+            System.err.println("錯誤：環境變數 YOUTUBE_CHANNEL_ID, DISCORD_WEBHOOK_URL, YOUTUBE_API_KEY, NEON_DB_URL 未設定完整！");
             System.exit(1);
         }
 
@@ -49,7 +50,9 @@ public class YoutubeNotifier {
 
             if (idMatcher.find()) {
                 String latestVideoId = idMatcher.group(1);
-                String lastVideoId = readLastVideoId();
+
+                // 改從 Neon DB 讀取上次紀錄的 ID
+                String lastVideoId = getDbLastVideoId(dbUrl, channelId);
 
                 System.out.println("當前最新影片 ID: " + latestVideoId);
                 System.out.println("上次紀錄影片 ID: " + lastVideoId);
@@ -61,12 +64,51 @@ public class YoutubeNotifier {
                     // 2. 呼叫 YouTube Data API 查詢詳細影片狀態與分類
                     checkAndSendNotification(client, apiKey, webhookUrl, latestVideoId);
 
-                    // 3. 更新紀錄檔
-                    saveLastVideoId(latestVideoId);
+                    // 3. 更新 Neon DB 紀錄
+                    saveDbLastVideoId(dbUrl, channelId, latestVideoId);
                 } else {
                     System.out.println("沒有新內容上傳。");
                 }
             }
+        }
+    }
+
+    // 從 Neon DB 查詢 last_video_id
+    private static String getDbLastVideoId(String dbUrl, String channelId) {
+        String sql = "SELECT last_video_id FROM youtube_channels WHERE channel_id = ?";
+        try (Connection conn = DriverManager.getConnection(dbUrl);
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            stmt.setString(1, channelId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    String lastId = rs.getString("last_video_id");
+                    return lastId != null ? lastId : "";
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("讀取 DB 失敗: " + e.getMessage());
+        }
+        return "";
+    }
+
+    // 更新 Neon DB 的 last_video_id (若紀錄不存在則自動插入 UPSERT)
+    private static void saveDbLastVideoId(String dbUrl, String channelId, String videoId) {
+        String sql = """
+            INSERT INTO youtube_channels (channel_id, last_video_id, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (channel_id) 
+            DO UPDATE SET last_video_id = EXCLUDED.last_video_id, updated_at = CURRENT_TIMESTAMP;
+        """;
+        try (Connection conn = DriverManager.getConnection(dbUrl);
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            stmt.setString(1, channelId);
+            stmt.setString(2, videoId);
+            stmt.executeUpdate();
+            System.out.println("成功更新 DB 紀錄為: " + videoId);
+        } catch (Exception e) {
+            System.err.println("寫入 DB 失敗: " + e.getMessage());
         }
     }
 
@@ -147,20 +189,6 @@ public class YoutubeNotifier {
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "");
-    }
-
-    private static String readLastVideoId() {
-        try {
-            Path path = Paths.get(LAST_VIDEO_FILE);
-            if (Files.exists(path)) return Files.readString(path).trim();
-        } catch (Exception ignored) {}
-        return "";
-    }
-
-    private static void saveLastVideoId(String videoId) {
-        try {
-            Files.writeString(Paths.get(LAST_VIDEO_FILE), videoId);
-        } catch (Exception ignored) {}
     }
 
     private static void sendDiscordWebhook(HttpClient client, String webhookUrl, String jsonPayload) throws Exception {
