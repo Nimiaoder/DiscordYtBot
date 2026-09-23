@@ -1,9 +1,5 @@
 name: YouTube New Video Checker
 
-# 允許 GitHub Actions 寫入 Git Repository (寫入 commit/push)
-permissions:
-  contents: write
-  
 on:
   schedule:
     # 每 10 分鐘自動執行一次 (格式: 分 時 日 月 週)
@@ -24,10 +20,14 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
+      - name: 下載 PostgreSQL JDBC Driver
+        run: |
+          curl -sL https://jdbc.postgresql.org/download/postgresql-42.7.2.jar -o postgresql.jar
+
       - name: 編譯 Java 程式
         run: |
           mkdir -p bin
-          javac -d bin src/main/java/com/liu/YoutubeNotifier.java
+          javac -cp postgresql.jar -d bin src/main/java/com/liu/YoutubeNotifier.java
 
       - name: 執行檢查程式
         env:
@@ -36,11 +36,4 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           NEON_DB_URL: ${{ secrets.NEON_DB_URL }}
         run: |
-          java -cp bin com.liu.YoutubeNotifier
-
-      - name: 自動更新並同步歷史紀錄檔 (避免重複通知)
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action Bot"
-          git add last_video_id.txt
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Chore: Update last video ID" && git push)
+          java -cp bin:postgresql.jar com.liu.YoutubeNotifier
